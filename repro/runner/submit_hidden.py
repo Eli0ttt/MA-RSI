@@ -29,11 +29,38 @@ def main():
   raise ValueError('Hidden already attempted; inspect prior job')
  expected=s.get('max_versions')
  count=s.get('completed_versions',0)
- complete=s.get('status')=='completed' and count==expected
- partial=s.get('status')=='partial_public' and isinstance(count,int) and count>=1 and count<expected
+ complete=s.get('status')=='completed' and count==expected==6
  if (not isinstance(expected,int) or expected<1 or s.get('task')!=a.task or
-     not (complete or partial) or len(s.get('candidates',[]))!=count):
+     not complete or len(s.get('candidates',[]))!=count or
+     s.get('final_public_review')!='final_generalization_review.json'):
   raise ValueError('Incomplete or mismatched research run')
+ review=json.loads((run/s['final_public_review']).read_text())
+ if review.get('candidate_count')!=6 or review.get('selected_solver_sha256')!=s['best_visible']['sha256']:
+  raise ValueError('Final public generalization review missing or changed')
+ seen=set()
+ for candidate in s['candidates']:
+  label=candidate.get('label')
+  source=run/'evaluations'/str(label)/'candidate_solver.py'
+  config=run/'evaluations'/(str(label)+'.yaml')
+  check=run/'evaluations'/str(label)/'visible.json'
+  digest=candidate.get('sha256')
+  if (not candidate.get('valid') or not source.is_file() or not config.is_file() or not check.is_file() or
+      hashlib.sha256(source.read_bytes()).hexdigest()!=digest or digest in seen):
+   raise ValueError('Six distinct, complete, selfchecked solver versions are required')
+  public=json.loads(check.read_text())
+  if public!=candidate.get('visible') or public.get('valid') is not True:
+   raise ValueError('Official public selfcheck evidence differs from candidate manifest')
+  seen.add(digest)
+ if {x.get('solver_sha256') for x in review.get('candidates',[])}!=seen:
+  raise ValueError('Final review does not cover exactly the six solver versions')
+ selected_label=s['best_visible']['label']
+ if (selected_label not in {c['label'] for c in s['candidates']} or
+     review.get('selected_label')!=selected_label):
+  raise ValueError('Final review selected a different solver version')
+ selected_config=run/'evaluations'/(selected_label+'.yaml')
+ if (not selected_config.is_file() or
+     hashlib.sha256(selected_config.read_text().encode()).hexdigest()!=review.get('selected_yaml_sha256')):
+  raise ValueError('Frozen selected configuration differs from final public review')
  task_root=root/'rsi_exam_tasks'/TASKS[a.task]
  if not (task_root/'task.toml').is_file() or not a.harbor_bin.is_file():raise FileNotFoundError('Task or Harbor unavailable')
  digest=hashlib.sha256(winner.read_bytes()).hexdigest()

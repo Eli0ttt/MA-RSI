@@ -1,6 +1,6 @@
 # Meta model mutation
 
-Choose exactly one modification based on the measured public task result: model_id assignments among the listed models, or the DAG topology (agent positions and reports_to edges). Existing agent prompts retain their roles. New agents start with openai:deepseek-v4-flash-s2 and all eight research tools. Keep the official task interface. Return the entire YAML and an evidence-based rationale.
+Choose exactly one modification based on the measured public task result: model_id assignments among the listed models, or the DAG topology (agent positions, roles and reports_to edges). A prompt may be updated only for an agent whose role changes in the topology edit. New agents start with openai:deepseek-v4-flash-s2 and receive the environment's research tools. Keep the official task interface. Return the entire YAML and an evidence-based rationale.
 
 Current configuration:
 ```yaml

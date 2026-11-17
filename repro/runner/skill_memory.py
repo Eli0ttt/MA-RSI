@@ -86,7 +86,7 @@ def add_run(skills, roles, task, run):
         record['status']='corroborated_public' if len(worked)>=2 else 'provisional'
     # Role notes retain a short attributed observation, never a full rollout.
     for directory in sorted((run/'evaluations').glob('*')) if (run/'evaluations').is_dir() else []:
-        if not directory.is_dir() or not directory.name.startswith(('parent_','step_')):continue
+        if not directory.is_dir() or not directory.name.startswith(('parent_','step_','attempt_')):continue
         visible=directory/'visible.json'
         if visible.is_file():
             try: outcome=json.loads(visible.read_text())
@@ -110,6 +110,8 @@ def add_run(skills, roles, task, run):
             excerpt=str(report.get('content') or '')[:350]
             spec=agent_specs.get(aid,{})
             note={'task':task,'agent_id':aid,'role':str(spec.get('role') or spec.get('metadata',{}).get('role_description') or aid.split('_')[0])[:100],
+                  'model_id':spec.get('model_id'),'input_condition':'Current task public instruction and upstream DAG reports',
+                  'local_topology':str((__import__('yaml').safe_load(config_file.read_text()) or {}).get('topology',{}))[:500] if config_file.is_file() else None,
                   'run':str(run),'label':directory.name,'public_metric':outcome.get('metric'),
                   'public_valid':outcome.get('valid'), 'agent_succeeded':report.get('success'),
                   'research_note_unverified':excerpt}
@@ -118,7 +120,7 @@ def add_run(skills, roles, task, run):
     # Bounded task-local working memory: recent two notes per role and task.
     recent=[]; counts={}
     for x in reversed(roles):
-        key=(x['task'],x['agent_id']);counts[key]=counts.get(key,0)+1
+        key=(x['task'],x.get('role'),x.get('model_id'));counts[key]=counts.get(key,0)+1
         if counts[key]<=2:recent.append(x)
     return skills,list(reversed(recent))
 
@@ -133,8 +135,8 @@ def render(skills,limit=5):
                       + 'Steps: '+'; '.join(s['steps'])+' Verify: '+s['verification'])
     return '\n'.join(result)[:4800]
 
-def role_context(notes,agent_id):
-    matches=[x for x in notes if x.get('agent_id')==agent_id][-2:]
+def role_context(notes,role,model_id):
+    matches=[x for x in notes if x.get('role')==role and x.get('model_id')==model_id][-2:]
     return '\n'.join(f"Prior task-local observation ({x['label']}, valid={x['public_valid']}, "
-                     f"score={x['public_metric']}): {x['research_note_unverified']}"
+                     f"score={x['public_metric']}, topology={x.get('local_topology')}): {x['research_note_unverified']}"
                      for x in matches)[:900]

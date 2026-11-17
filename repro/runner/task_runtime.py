@@ -92,6 +92,21 @@ def role_hint(agent,task):
          'do not use a solver from a previous task or previous run. '
          + ('Evolved prompt guidance: '+prompt if prompt else ''))
 
+def require_research_backend():
+ """Reject an unusable worker interpreter before selecting expensive parents."""
+ from importlib import metadata
+ try:
+  from smolagents import CodeAgent, Tool, ToolCallingAgent, ChatMessage, MessageRole
+  from smolagents.models import TokenUsage
+  from src.agents.runners.smolagents import SMOLAGENTS_AVAILABLE
+  if not all((CodeAgent,Tool,ToolCallingAgent,ChatMessage,MessageRole,TokenUsage)) or not SMOLAGENTS_AVAILABLE:
+   raise ImportError('CodeAgent runner unavailable')
+  from src.tools.subset_generation import CATALOG
+ except ImportError as exc:
+  raise RuntimeError(f'Research backend unavailable under {sys.executable}: {exc}. '
+                     'Install smolagents==1.26.0 in this Python environment.') from exc
+ return metadata.version('smolagents')
+
 def execute(config_path,task_root,task,output_dir,history,dry_run=False,
             role_notes=None,shared_skills=''):
  from src.agents.spec import AgentResult
@@ -133,7 +148,7 @@ def execute(config_path,task_root,task,output_dir,history,dry_run=False,
     result=AgentResult(agent_id=agent.id,content=content,success=True)
    else:
     from skill_memory import role_context
-    note=role_context(role_notes or [],agent.id)
+    note=role_context(role_notes or [],agent.role,agent.model_id)
     result=self.delegate.run(agent,role_hint(agent,task)+'\n'
                              +'Task-local notes for this agent (unverified):\n'+note+'\n'+text,context)
    (output_dir/f'agent_{agent.id}.json').write_text(json.dumps({

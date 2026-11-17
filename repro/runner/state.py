@@ -375,11 +375,23 @@ def experiment_commit(root,state,run):
   atom(skills_path,skills);atom(roles,notes)
   initial=[x['visible']['metric'] for x in summary['candidates'] if x['label'].startswith('parent_') and x['valid']]
   winner=summary['best_visible'];current=winner['visible']['metric']
-  if winner['label'].startswith('attempt_') and initial and current>max(initial):
+  review_file=run/'final_generalization_review.json'
+  review=json.loads(review_file.read_text()) if review_file.is_file() else {}
+  review_ok=(summary.get('status')=='completed' and summary.get('completed_versions')==6
+             and review.get('selected_solver_sha256')==winner['sha256']
+             and not review.get('risk_flags') and not review.get('uncertainty'))
+  if review_ok and winner['label'].startswith('attempt_') and initial and current>max(initial)+1e-9:
    source=run/'evaluations'/(winner['label']+'.yaml')
    dest=root/'repro/pool'/task;dest.mkdir(parents=True,exist_ok=True)
    target=dest/('evolved_'+task+'_'+hashlib.sha256(source.read_bytes()).hexdigest()[:12]+'.yaml')
    if not target.exists():shutil.copyfile(source,target)
+   index_path=dest/'index.json'
+   index=json.loads(index_path.read_text()) if index_path.is_file() else {}
+   index[target.name]={'source_run':str(run),'label':winner['label'],
+     'solver_sha256':winner['sha256'],'yaml_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+     'public_metric':current,'public_image_id':summary.get('public_image_id'),
+     'review':str(review_file),'status':'public_provisional'}
+   atom(index_path,index)
   manifest['runs'].append({'task':task,'seed':seed,'run':str(run),'hidden_score':summary['hidden_score']})
   atom(manifest_path,manifest)
   report=state/'results.csv';tmp=report.with_suffix('.csv.tmp')

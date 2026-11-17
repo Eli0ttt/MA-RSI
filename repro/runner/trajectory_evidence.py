@@ -14,13 +14,20 @@ def mutation_component(parent, child):
         raise ValueError('Existing research tool assignment changed')
     topology=a['topology']!=b['topology'] or set(old)!=set(new)
     changed_model=any(old[k].get('model_id')!=new[k].get('model_id') for k in old.keys()&new.keys())
-    if any(any(old[k].get(field)!=new[k].get(field) for field in ('prompt','role','temperature','max_tokens','device','agent_type')) for k in old.keys()&new.keys()):
-        raise ValueError('Existing agent role or prompt changed')
+    if any(any(old[k].get(field)!=new[k].get(field) for field in ('temperature','max_tokens','device','agent_type')) for k in old.keys()&new.keys()):
+        raise ValueError('Existing agent execution parameters changed')
+    role_changed=any(old[k].get('role')!=new[k].get('role') for k in old.keys()&new.keys())
+    prompt_changed=any(old[k].get('prompt')!=new[k].get('prompt') for k in old.keys()&new.keys())
+    if any(old[k].get('prompt')!=new[k].get('prompt') and old[k].get('role')==new[k].get('role')
+           for k in old.keys()&new.keys()):
+        raise ValueError('Prompt may change only with a changed role')
+    topology=topology or role_changed
     if topology:
         if changed_model:raise ValueError('Topology mutation also switched an existing model')
         for k in new.keys()-old.keys():
             if new[k]['model_id']!='openai:deepseek-v4-flash-s2':raise ValueError('New agent must start on s2')
         return 'topology'
+    if prompt_changed:raise ValueError('Standalone prompt edit is disallowed')
     if changed_model:return 'model_id'
     raise ValueError('No effective mutation')
 

@@ -603,11 +603,12 @@ execution:
         def one_change(candidate):
             old, new = yaml.safe_load(mas_config), yaml.safe_load(candidate)
             agents_old, agents_new = old["agents"], new["agents"]
-            changed = [field for field in ("prompt", "model_id", "tools")
-                       if any(agents_old.get(key, {}).get(field) !=
-                              agents_new.get(key, {}).get(field)
-                              for key in set(agents_old) | set(agents_new))]
-            if old.get("topology") != new.get("topology") or set(agents_old) != set(agents_new):
+            changed = ["model_id"] if any(agents_old.get(key, {}).get("model_id") !=
+                            agents_new.get(key, {}).get("model_id")
+                            for key in set(agents_old) & set(agents_new)) else []
+            if (old.get("topology") != new.get("topology") or set(agents_old) != set(agents_new)
+                    or any(agents_old[key].get("role") != agents_new[key].get("role")
+                           for key in set(agents_old) & set(agents_new))):
                 changed.append("topology")
             return changed
 
@@ -619,8 +620,8 @@ execution:
                 debate = []
                 for role, model in (("diagnostician", self.model), ("skeptic", skeptic)):
                     prompt = ("You are an independent MAS evolution analyst (" + role + "). "
-                              "Use only public observations. Propose exactly one of prompt, "
-                              "model_id, tools, topology to change. State evidence, hypothesis, "
+                              "Use only public observations. Propose exactly one of "
+                              "model_id or topology to change. State evidence, hypothesis, "
                               "exact edit, and predicted public-score effect in at most 250 words. "
                               "Do not write YAML.\nCurrent YAML:\n" + mas_config[:12000]
                               + "\nPublic observations:\n" + str(observations)[-6500:]
