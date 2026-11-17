@@ -12,19 +12,23 @@ import subprocess
 import sys
 from pathlib import Path
 
-NAMES = {'inventory':'bbo_simopt_inventory',
+NAMES = {'bbo':'bbo_noisy_continuous', 'inventory':'bbo_simopt_inventory',
          'graph':'johnson1991_leighton_graph_coloring',
-         'qec':'qec_decoder_arena'}
-ALLOWED = {'inventory':{'numpy'}, 'graph':{'numpy','gc_lib'},
-           'qec':{'numpy','scipy','stim','pymatching'}}
-CAPS = {'inventory':(2,'12g',None), 'graph':(2,'12g',None),
-        'qec':(8,'16g',1000)}
+         'qec':'qec_decoder_arena', 'cxr':'cxr_ood_triage_policy',
+         'game2048':'game2048_policy_search', 'dcf':'finscope_dcf_valuation'}
+ALLOWED = {'bbo':{'numpy'}, 'inventory':{'numpy'}, 'graph':{'numpy','gc_lib'},
+           'qec':{'numpy','scipy','stim','pymatching'}, 'cxr':set(),
+           'game2048':{'game2048'}, 'dcf':{'numpy'}}
+CAPS = {'bbo':(1,'12g',None), 'inventory':(2,'12g',None), 'graph':(2,'12g',None),
+        'qec':(8,'16g',1000), 'cxr':(2,'512m',1800),
+        'game2048':(4,'12g',1950), 'dcf':(2,'512m',1800)}
+ENTRY = {'game2048':'policy.py','dcf':'forecaster.py'}
 
 def static_gate(task, source):
     tree=ast.parse(source)
     classes=[x for x in tree.body if isinstance(x,ast.ClassDef)]
     funcs=[x for x in tree.body if isinstance(x,(ast.FunctionDef,ast.AsyncFunctionDef))]
-    if task=='inventory':
+    if task in ('bbo','inventory'):
         optimizer=next((x for x in classes if x.name=='Optimizer'),None)
         if optimizer is None: raise ValueError('Optimizer class missing')
         found={x.name:x for x in optimizer.body if isinstance(x,ast.FunctionDef)}
@@ -33,9 +37,12 @@ def static_gate(task, source):
             if fn not in found or [x.arg for x in found[fn].args.args][:len(required)] != required:
                 raise ValueError(f'Optimizer.{fn} signature missing or wrong')
     else:
-        name='solve' if task=='graph' else 'decode'
+        name={'graph':'solve','qec':'decode','cxr':'triage',
+              'game2048':'choose_move','dcf':'solve'}[task]
         fn=next((x for x in funcs if x.name==name),None)
-        required=['data'] if task=='graph' else ['setting','dets']
+        required={'graph':['data'],'qec':['setting','dets'],
+                  'cxr':['cases','resources','seed'], 'game2048':['board'],
+                  'dcf':['problem']}[task]
         if fn is None or [x.arg for x in fn.args.args][:len(required)] != required:
             raise ValueError(f'{name}{tuple(required)} entrypoint missing')
     if task=='inventory':
@@ -51,6 +58,14 @@ def static_gate(task, source):
             head=name.split('.')[0]
             if head and head not in sys.stdlib_module_names and head not in ALLOWED[task]:
                 raise ValueError(f'forbidden import {name}')
+    if task=='game2048':
+        if len(source.encode())>10_000_000: raise ValueError('policy.py exceeds official 10 MB cap')
+        forbidden={'os','subprocess','time','datetime','random','secrets','pathlib','socket','inspect','importlib','sys'}
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Import) and any(a.name.split('.')[0] in forbidden for a in node.names):
+                raise ValueError('2048 policy uses a forbidden runtime facility')
+            if isinstance(node,ast.ImportFrom) and (node.module or '').split('.')[0] in forbidden:
+                raise ValueError('2048 policy uses a forbidden runtime facility')
 
 def command(task, root, solver, runner, setting=None):
     cpus,mem,_=CAPS[task]
@@ -58,18 +73,33 @@ def command(task, root, solver, runner, setting=None):
     cmd=['docker','run','--rm','--network','none','--read-only',
          '--tmpfs','/tmp:rw,nosuid,size=1g','--cpus',str(cpus),
          '--memory',mem,'--pids-limit','512','-e','PYTHONDONTWRITEBYTECODE=1',
-         '--mount',f'type=bind,src={solver.resolve()},dst=/app/methods/main/solver.py,readonly']
+         '--mount',f'type=bind,src={solver.resolve()},dst=/app/methods/main/{ENTRY.get(task,"solver.py")},readonly']
+    if task=='game2048':
+        # Its official selfcheck writes visible_result.json beside itself.
+        cmd.remove('--read-only')
     if task=='qec':
         cmd += ['--mount',f'type=bind,src={runner.resolve()},dst=/runner/qec_public_runner.py,readonly']
     cmd += [image,'python']
     if task=='qec': cmd += ['/runner/qec_public_runner.py',setting]
+    elif task=='dcf': cmd += ['/app/fit_calibration.py','/app/methods/main']
+    elif task=='bbo': cmd += ['/app/selfcheck.py','--json']
     else: cmd += ['/app/selfcheck.py']
     return cmd
 
-def evaluate(task,root,solver):
+def evaluate(task,root,solver,output_dir=None):
     static_gate(task,solver.read_text(encoding='utf-8'))
     image=f'rsi-subset-{NAMES[task]}:public'
     subprocess.run(['docker','image','inspect',image],check=True,stdout=subprocess.DEVNULL)
+    if task=='bbo':
+        from continuous_visible import evaluate_solver, CandidateSelfcheckError
+        result=evaluate_solver(solver.read_text(),output_dir,image)
+        if not result.get('contract_valid'):raise CandidateSelfcheckError(result.get('contract_issue','contract invalid'))
+        trace_path=output_dir/'public_trace.json'
+        trace=json.loads(trace_path.read_text()) if trace_path.is_file() else []
+        components={f"case_{r['instance']}_seed_{r['seed_index']}":-float(r['latent_best_20_60_120'][-1])
+                    for r in trace if r.get('latent_best_20_60_120')}
+        return {'valid':True,'task':task,'metric':float(result['score']),
+                'metric_direction':'higher','components':components, 'stdout_tail':str(result)[-1600:]}
     _,_,limit=CAPS[task]
     runner=Path(__file__).with_name('qec_public_runner.py')
     if task=='qec':
@@ -95,6 +125,46 @@ def evaluate(task,root,solver):
         if not found:raise ValueError(f'official score missing: {text[-1000:]}')
         return {'valid':True,'task':task,'raw_metric':float(found[1]),'metric':float(found[2]),
                 'metric_direction':'higher','stdout_tail':text[-1600:]}
+    if task=='cxr':
+        probe=r'''import json,math,sys
+sys.path.insert(0,'/app/methods/main')
+from solver import triage
+from pathlib import Path
+root=Path('/app/data')
+def rows(name):return [json.loads(x) for x in (root/name).read_text().splitlines() if x.strip()]
+grade=rows('grade.jsonl');cases=[{k:v for k,v in c.items() if not k.startswith('gold_')} for c in grade]
+resources={'budget':.20,'labels':['Effusion','Cardiomegaly','Edema','Pneumonia','Consolidation','Atelectasis','Pneumothorax','Mass'], 'calibration':rows('calibration.jsonl'),'sites':sorted({c['site_id'] for c in grade}),'n_bins':15}
+found=triage(cases,resources,0)
+assert isinstance(found,list) and len(found)==len(cases)
+ids=[p['study_uid'] for p in found]
+assert len(set(ids))==len(ids) and set(ids)=={c['study_uid'] for c in cases}
+assert all(isinstance(p['risk'],(int,float)) and math.isfinite(p['risk']) and 0<=p['risk']<=1 for p in found)
+print('CONTRACT_PASS')'''
+        probe_cmd=command(task,root,solver,runner)[:-2]+['python','-c',probe]
+        checked=subprocess.run(probe_cmd,capture_output=True,text=True,timeout=1800)
+        if checked.returncode or 'CONTRACT_PASS' not in checked.stdout:
+            raise ValueError('CXR risk/id contract invalid: '+checked.stderr[-1200:])
+        found=re.search(r'triage_utility_pct \(visible\) = ([\d.]+)',text)
+        sites=re.findall(r'^\s*([A-Za-z0-9_-]+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s*$',text,re.M)
+        if not found or not sites: raise ValueError('Missing official CXR visible score or per-site output')
+        return {'valid':True,'task':task,'metric':float(found[1]),'metric_direction':'higher',
+                'components':{f'site_{s}':float(sens)-float(brier) for s,_,_,sens,brier in sites},
+                'stdout_tail':text[-1600:]}
+    if task=='game2048':
+        start=text.find('{')
+        data,_=json.JSONDecoder().raw_decode(text[start:])
+        if data.get('valid_fraction')!=1 or not isinstance(data.get('mean_score'),(int,float)):
+            raise ValueError('2048 public games incomplete or invalid')
+        return {'valid':True,'task':task,'metric':data['mean_score'],'metric_direction':'higher',
+                'components':{str(x['seed']):x['score'] for x in data['instances']},
+                'cpu_seconds_per_game':data.get('cpu_seconds_per_game')}
+    if task=='dcf':
+        found=re.search(r'median abs valuation error \(out-of-sample, visible\):\s*([\d.]+)',text)
+        if not found or 'WARNING:' in text or 'INVALID drivers' in text:
+            raise ValueError('DCF public calibration incomplete or invalid: '+text[-800:])
+        return {'valid':True,'task':task,'metric':-float(found[1]),
+                'raw_mave':float(found[1]),'metric_direction':'research rank; lower raw MAVE is better',
+                'stdout_tail':text[-1200:]}
     totals=re.search(r'total conflicts over\s+(\d+)/(\d+) solved graph\(s\)\s*=\s*(\d+)',text)
     if not totals:raise ValueError(f'official graph diagnostics missing: {text[-1000:]}')
     ok,all_count,conf=map(int,totals.groups())
@@ -102,11 +172,12 @@ def evaluate(task,root,solver):
     # A killed or invalid graph forfeits that instance only under the official rule.
     # Rank completed cases ahead of missing cases; this is a research surrogate.
     effective=conf+1000000*failed
-    return {'valid':True,'task':task,'raw_conflicts':conf,
+    return {'valid':failed==0,'task':task,'raw_conflicts':conf,
             'solved_graphs':ok,'total_graphs':all_count,'failed_graphs':failed,
             'effective_conflicts':effective,
             'metric':-effective,'metric_direction':'research surrogate; lower failed/conflicts is better',
-            'stdout_tail':text[-2200:]}
+            'stdout_tail':text[-2200:],
+            'components':{m[0]:-float(m[1]) for m in re.findall(r'^\s*(\S+)\s+\d+\s+[\d.]+s\s+conflicts=\s*(\d+)',text,re.M)}}
 
 def main():
     p=argparse.ArgumentParser()

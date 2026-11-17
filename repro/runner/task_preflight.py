@@ -8,6 +8,9 @@ FILES = {
  'bbo': ['instruction.md','environment/Dockerfile','environment/methods/main/solver.py','environment/selfcheck.py','environment/data/visible.json'],
  'inventory': ['instruction.md','environment/Dockerfile','environment/methods/main/solver.py','environment/selfcheck.py','environment/data/visible.json','environment/data/visible_anchors.json'],
  'graph': ['instruction.md','environment/Dockerfile','environment/methods/main/solver.py','environment/methods/main/gc_lib.py','environment/selfcheck.py','environment/data/visible.json'],
+ 'cxr': ['instruction.md','task.toml','environment/Dockerfile','environment/methods/main/solver.py','environment/selfcheck.py'],
+ 'game2048': ['instruction.md','task.toml','environment/Dockerfile','environment/methods/main/policy.py','environment/selfcheck.py'],
+ 'dcf': ['instruction.md','task.toml','environment/Dockerfile','environment/methods/main/forecaster.py','environment/fit_calibration.py'],
  'qec': ['instruction.md','environment/Dockerfile','environment/methods/main/solver.py','environment/selfcheck.py','environment/arena_harness.py', 'environment/settings_visible/color_d5/meta.json','environment/settings_visible/color_d5_Z/meta.json','environment/settings_visible/color_d7/meta.json','environment/settings_visible/color_d9/meta.json'],
 }
 

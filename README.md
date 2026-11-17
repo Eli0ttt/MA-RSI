@@ -1,37 +1,53 @@
-# MA RSI
+# MA-RSI 六任务实验
 
-基于 EvoMAS 的四个 RSI-Exam 任务研究框架。元模型选择 MAS 配置并进行 prompt、model ID、tools、topology 四类中的一次变异（或 crossover）；各任务的研究 agent 生成 `solver.py`，使用公开 selfcheck 选择候选，完成后交给独立的官方 Harbor verifier。单次研究最多 6 个版本、两个父配置、mutation 概率 0.7。`repro/evolution_core.py` 提供共同的进化动作调度和证据记录；任务接口与评测器依官方任务保留各自实现。
+在 RSI-Exam 六项官方任务上，研究 agent 从通用 MAS 配置池选择两份父配置，使用各任务公开数据生成和检查候选，并将最终公开胜出产物交给 Harbor 独立密封验证。每个 seed 最多六个**通过公开自检**的版本；失败的生成或自检尝试另记在 `attempts.json`，不计版本。每个任务的研究时限从其 `task.toml` 的 `[agent].timeout_sec` 读取。
 
-## 目录
+## 安装
 
-- `rsi_exam_tasks/<official-task>/`：四个任务相同层级。官方 `environment/`、`instruction.md`、`task.toml` 可纳入代码库；服务器本地 `tests/` 包含密封数据，整个目录被 Git 忽略。
-- `repro/runner/`：唯一研究入口 `run.sh`，四任务统一调用；`continuous_*` 是连续 BBO 的专用执行与公开评测模块，`task_*` 处理其他三个任务。需要不同适配器是因为官方 solver 接口及评测过程不同，不表示 BBO 有额外的权限或版本预算。
-- `repro/seeds/<task>/`：迁移时的两个父 YAML 快照。`repro/pool/<task>/` 是服务器运行时更新的两个谱系槽，不纳入 Git。
-- `repro/memory/`、`repro/skill/`、`repro/runner/state_current/`、`repro/runner/outputs/`：运行时知识、状态和轨迹，不纳入 Git。
-- `vendor/meta_engine/` 与 `vendor/agent_engine/`：基于 EvoMAS 的两个本地 fork，保留原 LICENSE 和来源 README；研究入口只依赖其 `src/`。
-- `submission/agent.py`：将公开胜出的 solver 交给 Harbor 的无模型生成提交代理，不属于早期 DSH 单/双模型研究方案。
+将补丁 ZIP 从项目父目录解压并覆盖同名文件；本地的 `env/experiment.env`、`tests/` 和已有结果不在补丁内。检查 `env/experiment.env` 的 `OPENAI_API_KEY`、`MA_RSI_ROOT`、`RSI_TASKS_ROOT`、`HARBOR_BIN`。四模型池、元模型、版本数与请求超时均在 `env/experiment.env` 中设置；`env/experiment.env.example` 给出完整模板。官方公开 Docker 镜像须按每项 `rsi_exam_tasks/<name>/environment/Dockerfile` 构建；六个任务均通过各自的 `rsi-subset-<official-task>:public` 镜像执行公开检查，每次使用一次性隔离容器。保留服务器上原有的官方密封 `tests/`，不要让研究模型读到它。
 
-## 迁移与安全边界
+## 运行
 
-执行附带的 `migrate.py`，从原项目根目录读取 BBO 的 `task.toml`、`environment/`、`tests/`，并从 `rsi_exam_tasks/` 读取另三个任务；最终四项均放在新仓库的 `rsi_exam_tasks/<task>/` 下。BBO 根目录版 `task.toml` 不固定已构建镜像 ID，和其他三项一样由 Harbor 构建任务镜像；其余 BBO 任务文件与旧 prebuilt 副本字节一致。迁移同时复制服务器本地环境文件、父池和共享知识；原项目不被修改。新 `state_current` 从空 manifest 开始；旧轨迹的 `run` 字段会转为 `legacy/...`，只保留作为证据标识，正常运行不会再访问旧项目。父池的 YAML 可能是旧实验晋升的配置，不等于原始论文种子；做严格的纯起点实验应另建干净状态。
-
-仓库不应上传 API key、`tests/` 下的密封评测数据、运行轨迹或持久状态。部署前执行 `git status --short` 与 `git ls-files` 检查。新机器须从获准的官方任务包恢复服务器本地 `tests/`，才能进行正式 Harbor 评测；不要以公开自检冒充正式成绩。
-
-## 启动
+以下六条命令分别放在六个终端，每条顺序跑三个 seed。研究运行不会自动重试已经完成的 seed；`outputs/` 中按时间保存每次运行。
 
 ```bash
 ROOT=/data/user/wenxinyi/experiments/MA-RSI
-cd "$ROOT"
-# 首次克隆且尚无本地状态时：
-cp env/experiment.env.example env/experiment.env
-chmod 600 env/experiment.env
-# 在 env/experiment.env 设置 OPENAI_API_KEY 与本机路径，并恢复官方本地 tests。
-python repro/pool_manager.py init --root "$ROOT"
-python repro/runner/state.py init --root "$ROOT" --state "$ROOT/repro/runner/state_current"
-# 现有迁移目录已由 migrate.py 初始化，无须再次 init。
-bash repro/runner/run.sh "$ROOT" "$ROOT/repro/runner/state_current" bbo original 72
+STATE="$ROOT/repro/runner/state_current"
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" bbo original "$seed"; done
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" inventory original "$seed"; done
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" graph original "$seed"; done
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" cxr original "$seed"; done
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" game2048 original "$seed"; done
+for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" dcf original "$seed"; done
 ```
 
-先确保本机 Harbor、Docker、四任务研究依赖已安装，任务镜像已按官方 Dockerfile 构建，且环境文件中指定的 BBO 公开评测容器在运行。其余任务将 `bbo` 换成 `inventory`、`graph`、`qec`；`run.sh` 在同一路径解析每个 task 的 `task.toml`。终端使用的 agent tools 与最终提交的 solver 导入白名单是两个不同边界，不能通过修改研究工具扩张官方 solver 权限。
+统一统计在 `repro/runner/state_current/results.csv`：每个 seed 的官方平台分数、官方原指标（如果 verifier 提供）、研究用时、密封评测用时、总用时、按模型可观测的 worker input/output/total token，以及已有 seed 的逐任务均值。均值行 `MEAN_1/2/3` 表示当前已完成样本数；三个 seed 全部结束后为 `MEAN_3`。元模型 token 和未提供 usage 的调用无法从现有日志可靠计数。
 
-官方规则：[BBO](https://rsi-exam.ai/tasks/bbo_noisy_continuous_v1.html)、[inventory](https://rsi-exam.ai/tasks/bbo_simopt_inventory_v1.html)、[graph](https://rsi-exam.ai/tasks/johnson1991_leighton_graph_coloring.html)、[QEC](https://rsi-exam.ai/tasks/qec_decoder_arena.html)。
+## 演化逻辑
+
+通用候选池位于 `repro/pool/rsi-exam-general/`，运行时已经晋升的该任务 YAML 也加入初选池，由元模型选择两份。选中的父配置和后续所有自检有效的配置组成临时池 W。先枚举 W 的全部两两组合：同一组至少四个可比公开子样本，两边各在至少两个子样本占优，并存在相同 agent ID 的不同模型分配，才进行 EvoMAS 式交叉；继承一份完整拓扑，按对应位置重组 agent。否则从 W 取 reward 最高的两份，基于反馈变异其中分数最高的一份，仅选择 model_id 或 topology。新 agent 使用 s2 和八项基础研究工具。关联性证据不等于单个 agent 的因果优势；未满足条件的任务只进行变异。
+
+`trajectory_evidence.jsonl` 保存操作与公开证据，`best_reward_config.yaml` 和 `best_visible_solver.py` 保存最终选择。公开的经验与角色摘要并发写入 `repro/memory/`、`repro/skill/`；密封分数只进入汇总与 manifest。新任务的官方公开包位于 `rsi_exam_tasks/`，没有打包密封测试。
+
+## 环境变量命名
+
+现有服务器 `env/experiment.env` 中若保留旧变量名，请只替换通用变量的名称、保留其值及 API key。旧的 `BBO_EVAL_CONTAINER` 无需保留；六项公开评测均直接使用任务镜像。
+
+| 旧变量 | 新变量 | 用途 |
+| --- | --- | --- |
+| `BBO_ROOT` | `MA_RSI_ROOT` | 项目根目录 |
+| `BBO_EVAL_CONTAINER` | 删除 | 不再需要长驻公开容器 |
+| `BBO_OPENAI_TIMEOUT` | `MODEL_REQUEST_TIMEOUT_SEC` | 全任务模型请求超时 |
+| `BBO_OPENAI_MAX_RETRIES` | `MODEL_REQUEST_MAX_RETRIES` | 全任务模型请求重试 |
+| `SUBSET_MAX_VERSIONS` | `MAX_VALID_VERSIONS` | 每次任务的有效版本上限 |
+
+`run.sh` 只读取并检查环境变量，不再重写元模型、模型池或版本数。`migrate.py` 也会把旧项目环境变量转换为新名称。
+
+BBO 公开镜像可从官方公开 `environment/Dockerfile` 构建，名称与其余任务相同：
+
+```bash
+ROOT=/data/user/wenxinyi/experiments/MA-RSI
+docker build -t rsi-subset-bbo_noisy_continuous:public "$ROOT/rsi_exam_tasks/bbo_noisy_continuous/environment"
+```
+
+公开评测会将候选 `solver.py` 只读挂载到镜像的 `/app/methods/main/solver.py`，执行官方 `selfcheck.py --json`。接口探针与公开轨迹探针也在同一镜像的独立临时容器中执行；无需已有的 `bbo-evomas-visible-wenxinyi` 容器。

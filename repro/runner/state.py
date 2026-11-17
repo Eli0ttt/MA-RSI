@@ -7,7 +7,8 @@ import yaml
 from skill_memory import add_run, render
 
 TASKS={'bbo':'bbo_noisy_continuous','inventory':'bbo_simopt_inventory',
-       'graph':'johnson1991_leighton_graph_coloring','qec':'qec_decoder_arena'}
+       'graph':'johnson1991_leighton_graph_coloring','qec':'qec_decoder_arena',
+       'cxr':'cxr_ood_triage_policy','game2048':'game2048_policy_search','dcf':'finscope_dcf_valuation'}
 COMMON=['research_read_context','research_read_public','research_read_feedback',
         'research_read_trace','research_read_history','research_write_candidate',
         'research_preflight','research_probe_candidate']
@@ -349,12 +350,78 @@ def commit(root,state,run):
 
 def operations_of(s):return s.get('operations',[])
 
+
+def experiment_commit(root,state,run):
+ """Atomic public-only memory and six-task CSV update across concurrent terminals."""
+ import csv,fcntl
+ run=run.resolve();summary=json.loads((run/'summary.json').read_text())
+ task=summary['task']; seed=summary['seed']
+ if summary['hidden_status']!='completed':raise ValueError('Official sealed result required')
+ lock=state/'lock';state.mkdir(parents=True,exist_ok=True)
+ with lock.open('a') as guard:
+  fcntl.flock(guard,fcntl.LOCK_EX)
+  manifest_path=state/'manifest.json'
+  manifest=json.loads(manifest_path.read_text()) if manifest_path.is_file() else {'schema':'ma-rsi-six-tasks','runs':[]}
+  if any(x['run']==str(run) for x in manifest['runs']):return
+  # Save a bounded, revisable public evidence record. No sealed labels enter model prompts.
+  memory,skills_path,roles=knowledge_paths(root,task)
+  memory.parent.mkdir(parents=True,exist_ok=True);roles.parent.mkdir(parents=True,exist_ok=True)
+  previous=read_list(memory)
+  previous.append({'task':task,'run':str(run),'seed':seed,'public_metric':summary['best_visible']['visible']['metric'],
+    'public_image_id':summary.get('public_image_id'),'winner_sha256':summary['best_visible']['sha256'],
+    'evidence':summary['operations'],'status':'provisional_public'})
+  atom(memory,previous)
+  skills,notes=add_run(read_list(skills_path),read_list(roles),task,run)
+  atom(skills_path,skills);atom(roles,notes)
+  initial=[x['visible']['metric'] for x in summary['candidates'] if x['label'].startswith('parent_') and x['valid']]
+  winner=summary['best_visible'];current=winner['visible']['metric']
+  if winner['label'].startswith('attempt_') and initial and current>max(initial):
+   source=run/'evaluations'/(winner['label']+'.yaml')
+   dest=root/'repro/pool'/task;dest.mkdir(parents=True,exist_ok=True)
+   target=dest/('evolved_'+task+'_'+hashlib.sha256(source.read_bytes()).hexdigest()[:12]+'.yaml')
+   if not target.exists():shutil.copyfile(source,target)
+  manifest['runs'].append({'task':task,'seed':seed,'run':str(run),'hidden_score':summary['hidden_score']})
+  atom(manifest_path,manifest)
+  report=state/'results.csv';tmp=report.with_suffix('.csv.tmp')
+  fields=['task','seed','official_score','official_metric','research_seconds','hidden_seconds','total_seconds','model_tokens_json','run']
+  runs=[]
+  for row in manifest['runs']:
+   data=json.loads((Path(row['run'])/'summary.json').read_text())
+   if data['hidden_status']!='completed':continue
+   usage={}
+   for file in (Path(row['run'])/'evaluations').glob('*/agent_*.json'):
+    if file.name=='agent_failures.json':continue
+    meta=json.loads(file.read_text()).get('metadata') or {}
+    name=meta.get('model_id')
+    if name:
+     u=usage.setdefault(name,{'input':0,'output':0,'total':0})
+     for key,field in (('input_tokens','input'),('output_tokens','output'),('total_tokens','total')):
+      u[field]+=int(meta.get(key) or 0)
+   for u in usage.values():
+    if not u['total']:u['total']=u['input']+u['output']
+   final=data.get('final_result') or {}
+   runs.append({'task':row['task'],'seed':row['seed'],'official_score':data['hidden_score'],
+    'official_metric':final.get('official_metric'),'research_seconds':data['research_seconds'],
+    'hidden_seconds':data.get('hidden_seconds',0),'total_seconds':data['research_seconds']+data.get('hidden_seconds',0),
+    'model_tokens_json':json.dumps(usage,ensure_ascii=False,sort_keys=True),'run':row['run']})
+  with tmp.open('w',newline='') as f:
+   writer=csv.DictWriter(f,fieldnames=fields);writer.writeheader()
+   for r in sorted(runs,key=lambda x:(x['task'],str(x['seed']))):writer.writerow(r)
+   for group in sorted(set(r['task'] for r in runs)):
+    items=[r for r in runs if r['task']==group]
+    writer.writerow({'task':group,'seed':'MEAN_'+str(len(items)),'official_score':sum(r['official_score'] for r in items)/len(items),
+     'official_metric':'','research_seconds':sum(r['research_seconds'] for r in items)/len(items),
+     'hidden_seconds':sum(r['hidden_seconds'] for r in items)/len(items),
+     'total_seconds':sum(r['total_seconds'] for r in items)/len(items),'model_tokens_json':'','run':''})
+  os.replace(tmp,report)
+  print(json.dumps({'task':task,'seed':seed,'results':str(report)},ensure_ascii=False))
+
 def main():
  p=argparse.ArgumentParser();sub=p.add_subparsers(dest='command',required=True)
- for cmd in ('init','export','commit','merge','replay','reconcile','rebuild-knowledge','ensure-shared'):
+ for cmd in ('init','export','commit','merge','replay','reconcile','rebuild-knowledge','ensure-shared','experiment-commit'):
   sp=sub.add_parser(cmd);sp.add_argument('--root',type=Path,required=True);sp.add_argument('--state',type=Path,required=True)
   if cmd=='export':sp.add_argument('--task',choices=TASKS,required=True);sp.add_argument('--dest',type=Path,required=True);sp.add_argument('--pool-policy',choices=('seeds','task_top2'),default='seeds');sp.add_argument('--shared-parent-pool',type=Path)
-  if cmd in ('commit','reconcile'):sp.add_argument('--run',type=Path,required=True)
+  if cmd in ('commit','reconcile','experiment-commit'):sp.add_argument('--run',type=Path,required=True)
   if cmd=='replay':sp.add_argument('--source-state',type=Path,required=True)
   if cmd=='merge':
    sp.add_argument('--mode',choices=('original',),required=True)
@@ -364,6 +431,7 @@ def main():
  elif a.command=='ensure-shared':ensure_shared(root)
  elif a.command=='export':export(root,state,a.task,a.dest,a.pool_policy,a.shared_parent_pool)
  elif a.command=='commit':commit(root,state,a.run.resolve())
+ elif a.command=='experiment-commit':experiment_commit(root,state,a.run)
  elif a.command=='rebuild-knowledge':
   import fcntl
   shared_lock=root/'repro/skill/.lock';shared_lock.parent.mkdir(parents=True,exist_ok=True)

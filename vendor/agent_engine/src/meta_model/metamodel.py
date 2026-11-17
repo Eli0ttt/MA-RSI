@@ -295,7 +295,9 @@ class MetaModel:
                     valid_selections.append(pool_metadata[name]["path"])
                     logger.info(f"  Selected: {name}")
 
-            # Fallback: if LLM selection failed, use programmatic selection
+            if len(set(valid_selections)) < k and getattr(self,'strict_selection',False):
+                raise ValueError('Model did not choose two distinct pool configurations')
+            # Legacy fallback for callers outside the six-task experiment.
             if len(valid_selections) < k:
                 logger.warning(f"LLM selected {len(valid_selections)}/{k}, falling back to programmatic selection")
                 from src.meta_model.selection import selection_operator
@@ -311,7 +313,8 @@ class MetaModel:
 
         except Exception as e:
             logger.error(f"Selection failed: {e}")
-            logger.warning("Falling back to programmatic selection")
+            if getattr(self,'strict_selection',False):raise
+            logger.warning('Falling back to programmatic selection')
             from src.meta_model.selection import selection_operator
             return selection_operator(task_query, pool_dir, k)
 
@@ -386,7 +389,7 @@ execution:
         else:
             model_constraint = ""
 
-        model_constraint += "\n\n" + getattr(self, "bbo_tool_policy", "")
+        model_constraint += "\n\n" + getattr(self, "research_tool_policy", "")
 
         # Prepare prompt variables
         prompt_vars = {
@@ -474,7 +477,7 @@ execution:
         else:
             model_constraint = ""
 
-        model_constraint += "\n\n" + getattr(self, "bbo_tool_policy", "")
+        model_constraint += "\n\n" + getattr(self, "research_tool_policy", "")
 
         # Prepare prompt variables
         prompt_vars = {
@@ -488,7 +491,7 @@ execution:
                 "intended_change, predicted_effect, predicted_direction. "
                 "Set predicted_direction to increase, decrease, or unknown for the "
                 "PUBLIC task score. Distinguish observations from hypotheses. "
-                "Return a fenced json block BEFORE the fenced yaml block, with exactly the requested observed_evidence, root_cause_hypothesis, component, intended_change, predicted_effect, predicted_direction fields. Use unknown rather than inventing a prediction. For graph the PUBLIC metric is -conflicts, so fewer conflicts means predicted_direction=increase. Change exactly ONE of prompt, model_id, tools, topology in the YAML. Preserve agent IDs and all other fields exactly. Preserve distinct prompt roles; do not copy one prompt over several specialized agents. A complete YAML is required."),
+                "Return a fenced json block BEFORE the fenced yaml block, with exactly the requested observed_evidence, root_cause_hypothesis, component, intended_change, predicted_effect, predicted_direction fields. Use unknown rather than inventing a prediction. For graph the PUBLIC metric is -conflicts, so fewer conflicts means predicted_direction=increase. Change exactly ONE of model_id or topology. New agents use openai:deepseek-v4-flash-s2 and inherit the eight research tools. Return complete YAML with valid DAG and distinct roles."),
             "model_constraint": model_constraint
         }
 
@@ -705,7 +708,7 @@ execution:
         else:
             model_constraint = ""
 
-        model_constraint += "\n\n" + getattr(self, "bbo_tool_policy", "")
+        model_constraint += "\n\n" + getattr(self, "research_tool_policy", "")
 
         # Prepare prompt variables
         prompt_vars = {

@@ -18,25 +18,28 @@ class ResearchSubmissionAgent(BaseAgent):
 
     async def setup(self, environment: BaseEnvironment) -> None:
         check = await environment.exec(
-            "test -f /opt/research-selected/solver.py && test -d /app/methods/main",
+            "test -f /opt/research-selected/" + self.artifact_name + " && test -d /app/methods/main",
             cwd="/app", timeout_sec=120,
         )
         if check.return_code != 0:
             raise RuntimeError("Selected solver mount or submission directory is missing: "
                                + check.stderr[-1200:])
 
-    def __init__(self, *args: Any, solver_sha256: str, **kwargs: Any):
+    def __init__(self, *args: Any, solver_sha256: str, artifact_name: str = "solver.py", **kwargs: Any):
         super().__init__(*args, **kwargs)
         if len(solver_sha256) != 64 or any(c not in '0123456789abcdef' for c in solver_sha256):
             raise ValueError('Invalid solver SHA-256')
+        if artifact_name not in ("solver.py","policy.py","forecaster.py"):
+            raise ValueError("Unknown official artifact")
+        self.artifact_name = artifact_name
         self.solver_sha256 = solver_sha256
 
     async def run(self, instruction: str, environment: BaseEnvironment,
                   context: AgentContext) -> None:
         code = (
             "import hashlib,pathlib; "
-            "src=pathlib.Path('/opt/research-selected/solver.py'); "
-            "dst=pathlib.Path('/app/methods/main/solver.py'); "
+            "src=pathlib.Path('/opt/research-selected/" + self.artifact_name + "'); "
+            "dst=pathlib.Path('/app/methods/main/" + self.artifact_name + "'); "
             "assert src.is_file() and not src.is_symlink(); "
             "data=src.read_bytes(); "
             "assert hashlib.sha256(data).hexdigest()==" + repr(self.solver_sha256) + "; "

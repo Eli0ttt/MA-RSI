@@ -17,7 +17,7 @@ CATALOG = {
  'research_write_candidate': 'Write complete source to your own candidate.py.',
  'research_preflight': 'Check your own source against the task entrypoint and import allow-list.',
  'research_probe_candidate': 'Probe your own source with a bounded public-image contract check.'}
-CATALOG_TEXT = 'Task generation tools; any subset may be assigned in evolved YAML:\n' + '\n'.join(
+CATALOG_TEXT = 'Task generation tools available to each agent:\n' + '\n'.join(
  f'- {k}: {v}' for k,v in CATALOG.items())
 LOCK=threading.Lock()
 PUBLIC_PROBES={}  # One bounded budget per candidate MAS execution root.
@@ -56,11 +56,24 @@ class ReadPublic(Base):
    result={'settings':{p.parent.name:{k:v for k,v in json.loads(p.read_text()).items()
                          if k in ('distance','rounds','n_detectors','n_observables','n_dev','n_eval','decode_budget_sec')}
                        for p in sorted(base.glob('*/meta.json'))}}
-  else:
+  elif self.task in ('bbo','inventory','graph'):
    data=json.loads((self.task_root/'environment/data/visible.json').read_text())
    cases=data.get('instances',[])
    result={'n_instances':len(cases),'fields':sorted(cases[0]) if cases else [],
            'budget':data.get('budget')}
+  elif self.task=='cxr':
+   base=self.task_root/'environment/data'
+   result={'public_grade_rows':sum(1 for _ in (base/'grade.jsonl').open()),
+           'calibration_rows':sum(1 for _ in (base/'calibration.jsonl').open())}
+  elif self.task=='game2048':
+   result=json.loads((self.task_root/'environment/visible_seeds.json').read_text())
+  elif self.task=='dcf':
+   import csv
+   base=self.task_root/'environment/data'
+   result={'public_calibration_rows':sum(1 for _ in csv.DictReader((base/'calibration_truth.csv').open())),
+           'public_fundamental_rows':sum(1 for _ in csv.DictReader((base/'fundamentals.csv').open()))}
+  else:
+   self.record(False);return 'DENIED: unsupported public task'
   self.record(True);return json.dumps(result,ensure_ascii=False)[:10000]
 
 class ReadHistory(Base):
@@ -114,7 +127,7 @@ class Preflight(Base):
   if item!='candidate.py' or path.is_symlink() or not path.is_file():
    self.record(False);return 'DENIED: write your candidate.py first'
   try:
-   from subset_visible import static_gate
+   from task_visible import static_gate
    static_gate(self.task,path.read_text(encoding='utf8'))
    self.record(True);return 'PASS: syntax, task entrypoint and allowed imports; official runtime selfcheck still required'
   except Exception as exc:
@@ -131,14 +144,15 @@ class ProbeCandidate(Base):
    used=PUBLIC_PROBES.get(str(self.root),0)
    if used<4:PUBLIC_PROBES[str(self.root)]=used+1
   if used>=4:self.record(False);return 'DENIED: probe limit (4 per candidate MAS)'
-  from subset_visible import static_gate
+  from task_visible import static_gate
   try:static_gate(self.task,path.read_text(encoding='utf8'))
   except Exception as exc:
    self.record(False);return f'FAIL: {type(exc).__name__}: {exc}'
   # The public, isolated image parses the actual candidate. No task data is
   # mounted from the host and there is no hidden grader access.
-  images={'inventory':'bbo_simopt_inventory','graph':'johnson1991_leighton_graph_coloring',
-          'qec':'qec_decoder_arena'}
+  images={'bbo':'bbo_noisy_continuous','inventory':'bbo_simopt_inventory','graph':'johnson1991_leighton_graph_coloring',
+          'qec':'qec_decoder_arena','cxr':'cxr_ood_triage_policy',
+          'game2048':'game2048_policy_search','dcf':'finscope_dcf_valuation'}
   source=path.read_text(encoding='utf8')
   cmd=['docker','run','--rm','-i','--network','none','--read-only',
        '--security-opt','no-new-privileges','--tmpfs','/tmp:rw,nosuid,size=256m',

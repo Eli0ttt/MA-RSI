@@ -509,8 +509,8 @@ class OpenAIModel:
             # A ten-retry, 120-second read timeout can stall one EvoMAS agent
             # for more than twenty minutes during a gateway outage. Keep the
             # SDK's own transient-error retry, but bound its cost per call.
-            retry_limit = int(os.environ.get("BBO_OPENAI_MAX_RETRIES", "1"))
-            request_timeout = float(os.environ.get("BBO_OPENAI_TIMEOUT", "120"))
+            retry_limit = int(os.environ["MODEL_REQUEST_MAX_RETRIES"])
+            request_timeout = float(os.environ["MODEL_REQUEST_TIMEOUT_SEC"])
             if retry_limit < 0 or retry_limit > 10 or request_timeout <= 0:
                 raise ValueError("Invalid BBO OpenAI retry/timeout settings")
             self.client = openai.OpenAI(

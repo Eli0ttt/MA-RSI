@@ -3,7 +3,6 @@
 from __future__ import annotations
 import json
 import subprocess
-import uuid
 from pathlib import Path
 
 class CandidateSelfcheckError(Exception):
@@ -101,151 +100,82 @@ print("PUBLIC_TRACE_JSON:" + json.dumps(report, separators=(",", ":")))
 '''
 
 
-def run_public_trace(remote_solver, output_dir, container):
-    """Sample public query trajectories after the full official selfcheck."""
-    try:
-        proc = subprocess.run(
-            ["docker", "exec", container, "python", "-c",
-             PUBLIC_TRACE_PROBE, remote_solver],
-            text=True, capture_output=True, timeout=30, check=False)
-        record = next((json.loads(line.removeprefix("PUBLIC_TRACE_JSON:"))
-                       for line in proc.stdout.splitlines()
-                       if line.startswith("PUBLIC_TRACE_JSON:")), None)
-        if proc.returncode or not isinstance(record, list):
-            raise ValueError((proc.stderr or proc.stdout)[-700:])
-        (output_dir / "public_trace.json").write_text(
-            json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-        (output_dir / "public_trace_error.txt").write_text(
-            str(exc)[-900:] + "\n", encoding="utf-8")
+def _public_command(solver: Path, image: str, *args: str) -> list[str]:
+    """One isolated public image invocation, matching the other task adapters."""
+    from task_visible import command, NAMES
+    expected = f"rsi-subset-{NAMES['bbo']}:public"
+    if image != expected:
+        raise ValueError(f"Expected the official BBO public image {expected}")
+    base = command('bbo', solver.parent, solver, Path(__file__))
+    return base[:base.index(image) + 1] + ['python', *args]
 
 
-def run_behavior_probe(remote_solver, output_dir, container):
-    """Research-side synthetic ask/tell probe; never exposed as an agent tool."""
+def _probe(solver: Path, image: str, program: str, timeout: int):
+    return subprocess.run(_public_command(solver, image, '-c', program,
+                          '/app/methods/main/solver.py'),
+                          text=True, capture_output=True, timeout=timeout, check=False)
+
+
+def run_behavior_probe(solver: Path, output_dir: Path, image: str) -> dict:
+    """Synthetic ask/tell contract check in a fresh public image."""
     try:
-        proc = subprocess.run(
-            ["docker", "exec", container, "python", "-c", CONTRACT_PROBE, remote_solver],
-            text=True, capture_output=True, timeout=60, check=False,
-        )
-        (output_dir / "contract_probe.log").write_text(proc.stdout + proc.stderr,
-                                                         encoding="utf-8")
-        record = next((json.loads(line.removeprefix("PROBE_JSON:"))
+        proc = _probe(solver, image, CONTRACT_PROBE, 60)
+        (output_dir/'contract_probe.log').write_text(proc.stdout + proc.stderr)
+        record = next((json.loads(line.removeprefix('PROBE_JSON:'))
                        for line in proc.stdout.splitlines()
-                       if line.startswith("PROBE_JSON:")), None)
+                       if line.startswith('PROBE_JSON:')), None)
         result = record if isinstance(record, dict) else {
-            "valid": False, "error": (proc.stderr or proc.stdout)[-1200:]}
-        result["valid"] = bool(result.get("valid") and proc.returncode == 0
-                               and "CONTRACT_PASS" in proc.stdout)
-    except subprocess.TimeoutExpired:
-        result = {"valid": False, "error": "synthetic contract probe timed out"}
-        (output_dir / "contract_probe.log").write_text(result["error"], encoding="utf-8")
-    (output_dir / "behavior_probe.json").write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            'valid': False, 'error': (proc.stderr or proc.stdout)[-1200:]}
+        result['valid'] = bool(result.get('valid') and proc.returncode == 0
+                               and 'CONTRACT_PASS' in proc.stdout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = {'valid': False, 'error': str(exc)[-1200:]}
+        (output_dir/'contract_probe.log').write_text(result['error'])
+    (output_dir/'behavior_probe.json').write_text(json.dumps(result,indent=2)+'\n')
     return result
 
 
-def parse_selfcheck_output(stdout):
-    required = {"score", "score_anytime", "score_final", "mean_final_latent_objective"}
-    for line in stdout.splitlines():
-        try:
-            result = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(result, dict) and required.issubset(result):
-            return result
-    raise ValueError("official selfcheck did not emit a complete JSON result")
-
-
-def evaluate_solver(solver_text, output_dir, container):
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    local_solver = output_dir / "candidate_solver.py"
-    local_solver.write_text(solver_text, encoding="utf-8")
-
-    remote_solver = f"/tmp/bbo_evo_{uuid.uuid4().hex}.py"
-
-    subprocess.run(
-        [
-            "docker",
-            "cp",
-            "-a",
-            str(local_solver),
-            f"{container}:{remote_solver}",
-        ],
-        check=True,
-    )
-
-    syntax = subprocess.run(
-        [
-            "docker",
-            "exec",
-            container,
-            "python",
-            "-m",
-            "py_compile",
-            remote_solver,
-        ],
-        check=False, text=True, capture_output=True,
-    )
-    if syntax.returncode:
-        (output_dir / "selfcheck.stdout.log").write_text(
-            syntax.stdout + syntax.stderr, encoding="utf-8")
-        raise CandidateSelfcheckError(syntax.stderr or syntax.stdout)
-
-    behavior = run_behavior_probe(remote_solver, output_dir, container)
-
-    proc = subprocess.run(
-        [
-            "docker",
-            "exec",
-            container,
-            "python",
-            "/app/selfcheck.py",
-            "--solver",
-            remote_solver,
-            "--json",
-        ],
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    (output_dir / "selfcheck.stdout.log").write_text(
-        proc.stdout + proc.stderr,
-        encoding="utf-8",
-    )
-    if proc.returncode:
-        if 'File "/app/selfcheck.py"' not in proc.stderr and remote_solver not in proc.stderr:
-            # Docker/daemon failures are infrastructure errors and must stop.
-            proc.check_returncode()
-        # The official harness raises its own ValueError when an optimizer
-        # returns an out-of-bounds point. That traceback need not name the
-        # candidate file; it is still an invalid generated solver, not a
-        # broken research pipeline. Preserve the exact stdout/stderr above.
-        detail = (proc.stderr or proc.stdout)[-5000:]
-        raise CandidateSelfcheckError(
-            f"official visible selfcheck exited {proc.returncode}: {detail}"
-        )
-
+def run_public_trace(solver: Path, output_dir: Path, image: str) -> None:
+    """Diagnostic on six visible instance/seed pairs in another fresh image."""
     try:
-        result = parse_selfcheck_output(proc.stdout)
-    except ValueError as exc:
-        raise CandidateSelfcheckError(
-            f"official visible selfcheck emitted no score: {exc}; "
-            f"stdout={(proc.stdout or '')[-1500:]}; stderr={(proc.stderr or '')[-1500:]}"
-        ) from exc
+        proc = _probe(solver, image, PUBLIC_TRACE_PROBE, 30)
+        record = next((json.loads(line.removeprefix('PUBLIC_TRACE_JSON:'))
+                       for line in proc.stdout.splitlines()
+                       if line.startswith('PUBLIC_TRACE_JSON:')), None)
+        if proc.returncode or not isinstance(record,list):
+            raise ValueError((proc.stderr or proc.stdout)[-700:])
+        (output_dir/'public_trace.json').write_text(json.dumps(record,indent=2)+'\n')
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        (output_dir/'public_trace_error.txt').write_text(str(exc)[-900:]+'\n')
 
-    result["contract_valid"] = behavior["valid"]
-    result["contract_issue"] = "" if behavior["valid"] else behavior.get("error", "")[-1500:]
-    result["behavior_probe"] = behavior
 
-    (output_dir / "selfcheck.json").write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+def parse_selfcheck_output(stdout: str) -> dict:
+    required = {'score','score_anytime','score_final','mean_final_latent_objective'}
+    for line in stdout.splitlines():
+        try: result = json.loads(line)
+        except json.JSONDecodeError: continue
+        if isinstance(result,dict) and required.issubset(result):return result
+    raise ValueError('Official BBO selfcheck emitted no complete score')
 
-    if result["contract_valid"]:
-        run_public_trace(remote_solver, output_dir, container)
 
+def evaluate_solver(solver_text: str, output_dir: Path, image: str) -> dict:
+    output_dir.mkdir(parents=True,exist_ok=True)
+    solver=output_dir/'candidate_solver.py'
+    solver.write_text(solver_text,encoding='utf8')
+    behavior=run_behavior_probe(solver,output_dir,image)
+    if not behavior['valid']:
+        raise CandidateSelfcheckError('BBO contract probe failed: '+str(behavior.get('error',''))[-1000:])
+    proc=subprocess.run(_public_command(solver,image,'/app/selfcheck.py','--json'),
+                        text=True,capture_output=True,check=False)
+    (output_dir/'selfcheck.stdout.log').write_text(proc.stdout+proc.stderr)
+    if proc.returncode:
+        raise CandidateSelfcheckError('Official BBO public selfcheck failed: '+
+                                      (proc.stderr or proc.stdout)[-2200:])
+    try:result=parse_selfcheck_output(proc.stdout)
+    except ValueError as exc:raise CandidateSelfcheckError(str(exc)) from exc
+    result['contract_valid']=True
+    result['contract_issue']=''
+    result['behavior_probe']=behavior
+    (output_dir/'selfcheck.json').write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
+    run_public_trace(solver,output_dir,image)
     return result
-

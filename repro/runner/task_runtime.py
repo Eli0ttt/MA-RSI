@@ -7,10 +7,9 @@ import re
 import sys
 from pathlib import Path
 import yaml
-from task_visible import static_gate
+from task_visible import static_gate, ENTRY
 
-MODELS={'openai:'+name.strip() for name in __import__('os').environ.get(
-        'MODEL_POOL','deepseek-v4-flash-s1,deepseek-v4-flash-s2').split(',')}
+MODELS={'openai:'+name.strip() for name in __import__('os').environ['MODEL_POOL'].split(',')}
 TOOLS={'research_read_context','research_read_public','research_read_feedback',
        'research_read_trace','research_read_history','research_write_candidate',
        'research_preflight','research_probe_candidate'}
@@ -32,7 +31,7 @@ def validate_yaml(source, model_pool=None):
  for aid,a in agents.items():
   if a.id!=aid or a.agent_type!='CodeAgent' or a.model_id not in models:
    raise ValueError(f'Invalid role/model for {aid}')
-  if set(a.tools)-TOOLS:raise ValueError(f'Unknown task tool for {aid}')
+  if set(a.tools)!=TOOLS or len(a.tools)!=len(TOOLS):raise ValueError(f'Expected all eight research tools for {aid}')
   if not a.prompt.strip():raise ValueError(f'Empty prompt for {aid}')
  return spec,terminal[0]
 
@@ -57,17 +56,21 @@ def extract(source,task):
  raise ValueError('No complete candidate for this task in terminal report')
 
 def role_hint(agent,task):
- output={'inventory':'NumPy 2.2.6 has no np.erf or np.math; math.erf accepts only a scalar, not a NumPy array. For a vector of expected-improvement z values use a validated vectorized approximation or an explicit scalar loop. Check ask(n) with an array input in the public selfcheck. Run preflight and public selfcheck. Treat space-filling probes and a regime-diverse initial policy portfolio as hypotheses; compare independent progress across the four public regimes; target robust per-case improvements within 48 queries. Optimizer with __init__(dim, lower, upper, budget, seed, rng), ask(n), tell(X,y,metadata=None), 4D [0,1]^4, 48 noisy costs; stdlib + NumPy 2.2.6 only, self-contained solver.py.',
+ output={'bbo':'Implement the official 10D 120-query Optimizer in solver.py. Use only public visible evaluations and honor the official budget and interface.', 'inventory':'NumPy 2.2.6 has no np.erf or np.math; math.erf accepts only a scalar, not a NumPy array. For a vector of expected-improvement z values use a validated vectorized approximation or an explicit scalar loop. Check ask(n) with an array input in the public selfcheck. Run preflight and public selfcheck. Treat space-filling probes and a regime-diverse initial policy portfolio as hypotheses; compare independent progress across the four public regimes; target robust per-case improvements within 48 queries. Optimizer with __init__(dim, lower, upper, budget, seed, rng), ask(n), tell(X,y,metadata=None), 4D [0,1]^4, 48 noisy costs; stdlib + NumPy 2.2.6 only, self-contained solver.py.',
          'graph':'Consider incremental neighbor-color counts, adaptive tabu/ILS and robust restarts; verify them on the public graphs. Always return n_vertices color entries for EVERY graph; a fallback must be a valid coloring even when a search/helper times out or returns an empty list. Use monotonic per-instance timing; finish each graph in at most 35s including setup and formatting to avoid the 45s kill. solve(data) returning {"colorings": [[int,...], ...]}; fixed target_k, fewer monochromatic edges, each graph <45 seconds; stdlib + NumPy, optional official gc_lib.',
-         'qec':'Investigate correlation-aware decoding or color-pair schemes using labeled development data as testable hypotheses, without memorizing public labels. Check all four visible settings, including d7 and d9; preserve shape and per-setting budget. A prior candidate crashed on Stim DemInstruction.args_copy used as a list; it is a method, so call args_copy() and test the actual result. Treat a failure in any one setting as a failed candidate to repair. decode(setting,dets) returning a boolean [n_shots,n_observables] array; per-setting decode limit 600/900s; stdlib + NumPy + SciPy + Stim + PyMatching only; dev labels allowed, eval truth withheld.'}[task]
+         'qec':'Investigate correlation-aware decoding or color-pair schemes using labeled development data as testable hypotheses, without memorizing public labels. Check all four visible settings, including d7 and d9; preserve shape and per-setting budget. A prior candidate crashed on Stim DemInstruction.args_copy used as a list; it is a method, so call args_copy() and test the actual result. Treat a failure in any one setting as a failed candidate to repair. decode(setting,dets) returning a boolean [n_shots,n_observables] array; per-setting decode limit 600/900s; stdlib + NumPy + SciPy + Stim + PyMatching only; dev labels allowed, eval truth withheld.',
+         'cxr':'Implement triage(cases, resources, seed) in solver.py using standard library only. Return exactly one {study_uid,risk} per case, with finite risk in [0,1]. Compare sensitivity and calibration at both sites under a shared review budget.',
+         'game2048':'Implement deterministic choose_move(board) in policy.py with standard library only. Return a legal direction within 5 seconds per move; track game-level mean score and CPU cost. No filesystem, clocks, environment, subprocesses or randomness in the submitted policy.',
+         'dcf':'Implement solve(problem) in forecaster.py. Return valid driver records for exactly problem.holdout_ids, with terminal_growth < wacc. Evaluate leave-one-out median valuation error using the official public calibration; stay within 512 MiB.'}[task]
+ artifact=ENTRY.get(task,'solver.py')
  prompt=agent.prompt if agent.prompt not in ('worker','smoa_aggregator','aggregator','judge','team_worker','processor','debater_initial','debater_round','reviewer_create','reviewer_review','reviewer_revise') else ''
  role=getattr(agent,'role','worker')
  if role=='judge':
   duty='Compare upstream proposals using public evidence and the official task contract; report one choice, defects, and a concrete repair plan. '
  elif role=='aggregator':
-  duty='Synthesize the upstream reports into one complete solver.py for the current task; verify the interface before finishing. '
+  duty=f'Synthesize upstream reports into one complete {artifact} for the current task; verify the interface before finishing. '
  else:
-  duty='Propose a distinct, implementable solver.py for the current task; state which public result would test your idea. '
+  duty=f'Propose a distinct, implementable {artifact} for the current task; state which public result would test your idea. '
  return ('This is the RSI-Exam '+task+' task. '+duty
          +output+' Preserve official interface and generalize to sealed cases. '
          'Research tools are available only when assigned in your YAML. '
@@ -93,12 +96,16 @@ def execute(config_path,task_root,task,output_dir,history,dry_run=False,
             role_notes=None,shared_skills=''):
  from src.agents.spec import AgentResult
  from src.mas import runtime as runtime_mod
- from src.agents.runners.smolagents import SmolagentsRunner
- from src.tools.subset_generation import CATALOG
+ if not dry_run:
+  from src.agents.runners.smolagents import SmolagentsRunner
+ if not dry_run:
+  from src.tools.subset_generation import CATALOG
+ else: CATALOG={}
  spec,terminal=validate_yaml(config_path.read_text(encoding='utf8'))
  output_dir.mkdir(parents=True,exist_ok=True)
  workspace=output_dir/'tool_workspace';workspace.mkdir(exist_ok=True)
- starter=(task_root/'environment/methods/main/solver.py').read_text(encoding='utf8')
+ artifact=ENTRY.get(task,'solver.py')
+ starter=(task_root/'environment/methods/main'/artifact).read_text(encoding='utf8')
  instruction=(task_root/'instruction.md').read_text(encoding='utf8')
  (workspace/'instruction.md').write_text(instruction)
  (workspace/'history.json').write_text(json.dumps(history,ensure_ascii=False))
@@ -107,7 +114,7 @@ def execute(config_path,task_root,task,output_dir,history,dry_run=False,
   (p/'candidate.py').write_text(starter)
  # One official starter per new task/session; previous-run solver never appears here.
  prompt=(f'Official RSI-Exam {task} research instruction:\n{instruction}\n'
-         'The starter below is the current task baseline, not a preceding task output.\n'
+         f'The starter below is the current task baseline for {artifact}, not a preceding task output.\n'
          f'```python\n{starter}\n```\n'
          'All earlier candidate results listed next are from THIS session only:\n'
          +json.dumps([{k:v for k,v in h.items() if k!='source'} for h in history],ensure_ascii=False)[-16000:]

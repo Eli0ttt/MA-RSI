@@ -16,7 +16,7 @@ Create a new MAS configuration by combining strengths of two parent configuratio
 - For EACH agent position in the inherited topology, you can:
   - Take the agent configuration from Parent 1
   - Take the agent configuration from Parent 2
-  - Create a modified version by combining properties from both parents' agents
+  - Combine their model assignments for the corresponding role
 
 **DO NOT:**
 - Create a new topology structure from scratch
@@ -52,7 +52,7 @@ Combine the best aspects of both parents to create an offspring MAS:
 
 1. **Topology Selection**: Choose which parent's topology structure to inherit (consider coordination efficiency)
 2. **Agent Selection**: For each agent in the inherited topology, choose the best agent configuration
-3. **Prompt Combination**: Merge or select best prompts for each agent
+3. **Role Alignment**: Map agent roles between parents using their public strengths
 4. **Model Assignment**: Choose best models for each agent role
 5. **Configuration Synthesis**: Balance complexity and performance
 

@@ -5,7 +5,8 @@ import argparse,hashlib,json,os,subprocess,time
 from pathlib import Path
 
 TASKS={'bbo':'bbo_noisy_continuous','inventory':'bbo_simopt_inventory',
-       'graph':'johnson1991_leighton_graph_coloring','qec':'qec_decoder_arena'}
+       'graph':'johnson1991_leighton_graph_coloring','qec':'qec_decoder_arena',
+       'cxr':'cxr_ood_triage_policy','game2048':'game2048_policy_search','dcf':'finscope_dcf_valuation'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True)
  p.add_argument('--run',type=Path,required=True);p.add_argument('--task',choices=TASKS,required=True)
@@ -16,7 +17,7 @@ def main():
  s=json.loads(summary.read_text());winner=run/'best_visible_solver.py'
  if a.retry_infrastructure:
   old=Path(s.get('final_result',{}).get('diagnostic_path') or '')
-  if a.task!='bbo' or not old.is_file():raise ValueError('No earlier BBO grader diagnostic')
+  if not old.is_file():raise ValueError('No earlier grader diagnostic')
   detail=json.loads(old.read_text())
   if not (detail.get('correctness') is False and detail.get('num_evals')==0 and
           any('grader failed:' in str(error) for error in detail.get('errors') or [])):
@@ -26,37 +27,32 @@ def main():
       'score':s.get('hidden_score'),'error':detail.get('errors')})
  elif s.get('hidden_status')!='not_run' or s.get('hidden_job'):
   raise ValueError('Hidden already attempted; inspect prior job')
- if a.task=='bbo':
-  complete=s.get('completed_solver_versions')==s.get('solver_limit')
-  partial=bool(s.get('stopped_invalid_yaml')) and 2<=s.get('completed_solver_versions',0)<s.get('solver_limit',0)
-  if not (complete or partial):raise ValueError('Incomplete BBO without validated partial winner')
-  task_root=root/'rsi_exam_tasks/bbo_noisy_continuous'
- else:
-  expected=s.get('max_versions')
-  count=s.get('completed_versions',0)
-  complete=s.get('status')=='completed' and count==expected
-  partial=s.get('status')=='partial_public' and bool(s.get('stopped_invalid_yaml')) and 2<=count<expected
-  if (expected not in (4,6) or s.get('task')!=a.task or not (complete or partial) or
-      len(s.get('candidates',[]))!=count):
-   raise ValueError('Incomplete or mismatched subset run')
-  task_root=root/'rsi_exam_tasks'/TASKS[a.task]
+ expected=s.get('max_versions')
+ count=s.get('completed_versions',0)
+ complete=s.get('status')=='completed' and count==expected
+ partial=s.get('status')=='partial_public' and isinstance(count,int) and count>=1 and count<expected
+ if (not isinstance(expected,int) or expected<1 or s.get('task')!=a.task or
+     not (complete or partial) or len(s.get('candidates',[]))!=count):
+  raise ValueError('Incomplete or mismatched research run')
+ task_root=root/'rsi_exam_tasks'/TASKS[a.task]
  if not (task_root/'task.toml').is_file() or not a.harbor_bin.is_file():raise FileNotFoundError('Task or Harbor unavailable')
  digest=hashlib.sha256(winner.read_bytes()).hexdigest()
  if digest!=s['best_visible']['sha256']:raise ValueError('Selected source SHA mismatch')
- if a.task!='bbo' and (not s['best_visible'].get('valid') or
+ if (not s['best_visible'].get('valid') or
     not any(c['sha256']==digest and c['valid'] for c in s['candidates'])):
   raise ValueError('Winner not in valid public candidate manifest')
- if len(winner.read_bytes())>100000:raise ValueError('Candidate source exceeds research cap')
+ artifact={'game2048':'policy.py','dcf':'forecaster.py'}.get(a.task,'solver.py')
+ if a.task=='game2048' and len(winner.read_bytes())>10000000:raise ValueError('Policy exceeds official cap')
  name=f'research-{a.task}-{digest[:12]}-{time.time_ns()}'
  jobs=run/'harbor_jobs';jobs.mkdir(exist_ok=True)
  job=jobs/name
- mounts=json.dumps([{'type':'bind','source':str(winner),'target':'/opt/research-selected/solver.py',
+ mounts=json.dumps([{'type':'bind','source':str(winner),'target':'/opt/research-selected/'+artifact,
                      'read_only':True}])
  cmd=[str(a.harbor_bin),'run','--yes','--env','docker','--job-name',name,
       '--jobs-dir',str(jobs),'--n-concurrent','1','--n-attempts','1','--max-retries','0',
       '--path',str(task_root),'--agent','submission.agent:ResearchSubmissionAgent',
-      '--model',os.environ.get('META_MODEL','deepseek-v4-flash-s1'),'--mounts',mounts,
-      '--agent-kwarg','solver_sha256='+digest]
+      '--model',os.environ['META_MODEL'],'--mounts',mounts,
+      '--agent-kwarg','solver_sha256='+digest,'--agent-kwarg','artifact_name='+artifact]
  env=os.environ.copy();env['PYTHONPATH']=str(root)+os.pathsep+env.get('PYTHONPATH','')
  s['hidden_status']='running';s['hidden_job']=str(job);summary.write_text(json.dumps(s,indent=2,ensure_ascii=False)+'\n')
  log=run/(name+'.hidden.log');start=time.monotonic()
@@ -74,7 +70,10 @@ def main():
  metric_names={'bbo':('oracle_normalized_auc70_final30','higher'),
                'inventory':('mean_log_cost_progress_auc70_final30','higher'),
                'graph':('total_conflicts','lower'),
-               'qec':('mean_setting_score','higher')}
+               'qec':('mean_setting_score','higher'),
+               'cxr':('triage_utility_pct','higher'),
+               'game2048':('mean_score','higher'),
+               'dcf':('median_absolute_valuation_error','lower')}
  label,direction=metric_names[a.task]
  metric=None
  detail=None
@@ -86,7 +85,7 @@ def main():
   except (OSError,ValueError):pass
  # Harbor can report a numeric zero when the trusted grader itself failed
  # before running the submitted solver. This is not an experimental score.
- if a.task=='bbo' and isinstance(detail,dict):
+ if isinstance(detail,dict):
   grader_errors=detail.get('errors') or []
   if (detail.get('correctness') is False and detail.get('num_evals')==0
       and any('grader failed:' in str(error) for error in grader_errors)):
@@ -94,7 +93,7 @@ def main():
    s['hidden_score']=None
    s['hidden_error']='; '.join(map(str,grader_errors))[:1500]
    summary.write_text(json.dumps(s,indent=2,ensure_ascii=False)+'\n')
-   raise RuntimeError('Trusted BBO grader failed before evaluation: '+s['hidden_error'])
+   raise RuntimeError('Trusted grader failed before evaluation: '+s['hidden_error'])
  s['hidden_status']='completed';s['hidden_score']=float(value)
  s['final_result']={'official_metric_name':label,'official_metric_direction':direction,
                     'official_metric':metric,'platform_reward':float(value),

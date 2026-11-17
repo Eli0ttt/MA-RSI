@@ -31,8 +31,8 @@ def _model_slot(model_id):
     Kernel locks release automatically if a worker crashes. The lock directory
     contains only scheduling metadata and never task assets or solver outputs.
     """
-    cap = max(1, int(os.environ.get("EVOMAS_PER_MODEL_CONCURRENCY", "2")))
-    root = Path(os.environ.get("EVOMAS_MODEL_LOCK_DIR", "/tmp/evomas_model_slots"))
+    cap = max(1, int(os.environ["EVOMAS_PER_MODEL_CONCURRENCY"]))
+    root = Path(os.environ["EVOMAS_MODEL_LOCK_DIR"])
     root.mkdir(parents=True, exist_ok=True)
     prefix = hashlib.sha256(model_id.encode()).hexdigest()[:20]
     started_waiting = time.monotonic()

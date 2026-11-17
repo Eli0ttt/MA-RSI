@@ -88,18 +88,27 @@ def main():
             assert digest(src/relative)==digest(dst/relative), (name,relative)
     previous=old/'env/dsh_bbo_experiment.env'
     original=previous.read_text(encoding='utf8') if previous.is_file() else (new/'env/experiment.env.example').read_text(encoding='utf8')
+    renamed={'SUBSET_MAX_VERSIONS':'MAX_VALID_VERSIONS',
+             'BBO_OPENAI_TIMEOUT':'MODEL_REQUEST_TIMEOUT_SEC',
+             'BBO_OPENAI_MAX_RETRIES':'MODEL_REQUEST_MAX_RETRIES'}
     allowed={'OPENAI_API_KEY','OPENAI_BASE_URL','META_MODEL','MODEL_POOL','HARBOR_BIN',
-             'BBO_EVAL_CONTAINER','SUBSET_MAX_VERSIONS','MUTATION_PROBABILITY',
-             'BBO_OPENAI_TIMEOUT','BBO_OPENAI_MAX_RETRIES','EVOMAS_PER_MODEL_CONCURRENCY',
-             'EVOMAS_MODEL_LOCK_DIR','EXPERIMENT_SEED','KNOWLEDGE_READ_MODE',
-             'PARENT_CONFIG_POLICY','PARENT_POOL_POLICY'}
-    raw='\n'.join(line for line in original.splitlines() if
-                  line.split('=',1)[0].strip().removeprefix('export ') in allowed or
-                  line.strip().startswith('source ') and '/bin/activate ' in line)+'\n'
-    for key,value in (('BBO_ROOT',new),('RSI_TASKS_ROOT',new/'rsi_exam_tasks'),
-                      ('TASK_ROOT_BBO',new/'rsi_exam_tasks/bbo_noisy_continuous'),
-                      ('PARENT_POOL_DIR',new/'repro/pool'),('POOL_PROMOTION_MODE','auto')):
-        raw=set_shell(raw,key,value)
+             'MAX_VALID_VERSIONS','MODEL_REQUEST_TIMEOUT_SEC',
+             'MODEL_REQUEST_MAX_RETRIES','EVOMAS_PER_MODEL_CONCURRENCY',
+             'EVOMAS_MODEL_LOCK_DIR','KNOWLEDGE_READ_MODE'}
+    lines=[]
+    for line in original.splitlines():
+        key=line.split('=',1)[0].strip().removeprefix('export ')
+        if key in renamed:
+            line=line.replace(key+'=',renamed[key]+'=',1)
+            key=renamed[key]
+        if key in allowed or (line.strip().startswith('source ') and '/bin/activate ' in line):
+            lines.append(line)
+    raw='\n'.join(lines)+'\n'
+    for key,value in (('MA_RSI_ROOT',new),('RSI_TASKS_ROOT',new/'rsi_exam_tasks'),
+                      ('MAX_VALID_VERSIONS',6),('MODEL_REQUEST_TIMEOUT_SEC',180),
+                      ('MODEL_REQUEST_MAX_RETRIES',2)):
+        if not any(line.split('=',1)[0].strip()==key for line in raw.splitlines()):
+            raw=set_shell(raw,key,value)
     env.write_text(raw,encoding='utf8');env.chmod(0o600)
     # Keep the current two lineage YAMLs and distilled knowledge available locally.
     for folder in ('pool','memory','skill'):
