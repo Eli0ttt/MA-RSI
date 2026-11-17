@@ -286,13 +286,18 @@ def main():
             if any(x['action']=='crossover' and x.get('parents')==[left['label'],right['label']] for x in attempts):
                 pair=None
         if not pair:
-            action='mutation';best=sorted(records,key=lambda r:r['reward'],reverse=True)[:2]
-            if len(best)<2:break
-            left,right=best;evidence={'selection':'top_two_reward','rewards':[left['reward'],right['reward']]}
+            action='mutation'
+            if not records: break
+            left=max(records,key=lambda r:r['reward'])
+            right=None
+            evidence={'selection':'best_reward_single_parent','reward':left['reward'],
+                      'parent':left['label']}
+        parent_records=(left,) if action=='mutation' else (left,right)
+        parent_labels=[r['label'] for r in parent_records]
         label=f'attempt_{len(attempts):03d}'
         append_event(a.output_dir/'decision_evidence.jsonl',{'phase':'before','label':label,
-            'action':action,'parents':[left['label'],right['label']],
-            'evidence_refs':[f'evaluations/{left["label"]}/visible.json',f'evaluations/{right["label"]}/visible.json'],
+            'action':action,'parents':parent_labels,
+            'evidence_refs':[f'evaluations/{r["label"]}/visible.json' for r in parent_records],
             'observed_evidence':evidence,'failure_hypothesis':'unverified',
             'alternative_actions':['mutation' if action=='crossover' else 'crossover','retest'],
             'predicted_metric_direction':'unknown','predicted_new_failure':'unknown',
@@ -311,7 +316,7 @@ def main():
                 component=mutation_component(left['config'],proposed)
             validate_yaml(proposed,MODELS)
         except Exception as ex:
-            attempts.append({'label':label,'action':action,'parents':[left['label'],right['label']],
+            attempts.append({'label':label,'action':action,'parents':parent_labels,
                              'valid':False,'error':str(ex)[-1200:],'evidence':evidence})
             write_json(a.output_dir/'attempts.json',attempts)
             append_event(a.output_dir/'decision_evidence.jsonl',{'phase':'after','label':label,
@@ -324,17 +329,17 @@ def main():
             except (ValueError,IndexError):pass
         append_event(a.output_dir/'decision_evidence.jsonl',{'phase':'before_public_test','label':label,
             'action':action,'declared_rationale':declared,'planned_component':component,
-            'parent_yaml_sha256':[hashlib.sha256(r['config'].encode()).hexdigest() for r in (left,right)],
+            'parent_yaml_sha256':[hashlib.sha256(r['config'].encode()).hexdigest() for r in parent_records],
             'child_yaml_sha256':hashlib.sha256(proposed.encode()).hexdigest(),
             'prediction':(declared or {}).get('predicted_effect','unknown')})
-        child=test(label,proposed,action,(left['label'],right['label']),evidence)
+        child=test(label,proposed,action,parent_labels,evidence)
         append_event(a.output_dir/'decision_evidence.jsonl',{'phase':'after','label':label,
             'changed_component':component,'public_valid':child['valid'],
             'public_metric':child['visible'].get('metric'),'parent_public_metrics':[
-                left['visible'].get('metric'),right['visible'].get('metric')],
+                r['visible'].get('metric') for r in parent_records],
             'solver_sha256':child['sha256'],'elapsed_seconds':child['elapsed'],
             'prediction_met':'unknown'})
-        operations.append({'label':label,'action':action,'component':component,'parents':[left['label'],right['label']],
+        operations.append({'label':label,'action':action,'component':component,'parents':parent_labels,
                            'evidence':evidence,'public_metric':child['visible'].get('metric'),'valid':child['valid']})
         with (a.output_dir/'trajectory_evidence.jsonl').open('a') as stream:
             stream.write(json.dumps({'task':a.task,'label':label,'action':action,'component':component,
