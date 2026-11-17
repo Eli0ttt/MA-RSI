@@ -1,0 +1,2 @@
+"""Sealed Harbor solver submission.
+"""

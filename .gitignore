@@ -1,0 +1,33 @@
+# Private credentials and machine-local settings
+env/experiment.env
+.env
+.env.*
+!.env.example
+
+# Local task verification bundles include sealed grader inputs and truth.
+# Keep them in the working tree for Harbor; never publish them.
+rsi_exam_tasks/*/tests/
+rsi_exam_tasks/*/verifier/
+
+# Research results and persistent state (managed on the experiment server)
+repro/runner/outputs/
+repro/runner/state_current/
+repro/memory/
+repro/skill/
+repro/pool/
+repro/evomas_model_slots/
+*.input/
+*.log
+*.agent-trace.tar.zst
+
+# Python/build/editor
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+*.tmp
+*.bak
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,164 @@
+name: smoa_compact
+description: Two specialized proposals, selection, two focused revisions, selection
+  and synthesis
+backend: smolagents
+agents:
+  proc_l1_1:
+    id: proc_l1_1
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Propose a complete correlation-aware decoder using allowed libraries and
+      public development labels. Use only imports and public assets allowed by the
+      current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.6
+    device: null
+  proc_l1_2:
+    id: proc_l1_2
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Propose an independent calibration or color-pair method and its generalization
+      risk at d7 and d9. Use only imports and public assets allowed by the current
+      official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.7
+    device: null
+  judge_l1:
+    id: judge_l1
+    role: judge
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Compare both decoder proposals on four public setting scores, valid return
+      dtype, and time budgets. Use only imports and public assets allowed by the current
+      official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 2048
+    temperature: 0.2
+    device: null
+  proc_l2_1:
+    id: proc_l2_1
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Revise the selected decoder, keeping the complete decode(setting,dets)
+      interface. Use only imports and public assets allowed by the current official
+      task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.45
+    device: null
+  proc_l2_2:
+    id: proc_l2_2
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Challenge d7/d9 behavior, boolean [n_shots,n_observables] shape, and unseen-setting
+      robustness. Use only imports and public assets allowed by the current official
+      task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.35
+    device: null
+  judge_l2:
+    id: judge_l2
+    role: judge
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Select the revision with strongest four-setting public evidence; list
+      failures explicitly. Use only imports and public assets allowed by the current
+      official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 2048
+    temperature: 0.2
+    device: null
+  aggregator:
+    id: aggregator
+    role: aggregator
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Produce one complete decode(setting,dets) returning a boolean [n_shots,n_observables]
+      array for every setting; check all four public settings. Use only imports and
+      public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.2
+    device: null
+topology:
+  reports_to:
+    proc_l1_1:
+    - judge_l1
+    proc_l1_2:
+    - judge_l1
+    judge_l1:
+    - proc_l2_1
+    - proc_l2_2
+    proc_l2_1:
+    - judge_l2
+    proc_l2_2:
+    - judge_l2
+    judge_l2:
+    - aggregator
+execution:
+  parallel_workers: true
+  timeout: 900
+  max_retries: 0

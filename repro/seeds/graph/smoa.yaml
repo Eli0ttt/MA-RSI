@@ -1,0 +1,171 @@
+name: smoa_compact
+description: Two specialized proposals, selection, two focused revisions, selection
+  and synthesis
+backend: smolagents
+agents:
+  proc_l1_1:
+    id: proc_l1_1
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:GLM-5.3-Flash
+    prompt: Propose a fast incremental conflict-minimizing search with a concrete
+      bounded update rule. Output a valid Python list `coloring` of length n (number
+      of nodes) with each entry an integer in [0, target_k). Use only imports and
+      public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.6
+    device: null
+  proc_l1_2:
+    id: proc_l1_2
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:GLM-5.3-Flash
+    prompt: Propose an alternative initialization and restart strategy with explicit
+      large-graph complexity. Output a valid Python list `coloring` of length n (number
+      of nodes) with each entry an integer in [0, target_k). Use only imports and
+      public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.7
+    device: null
+  judge_l1:
+    id: judge_l1
+    role: judge
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Compare both proposals by public conflicts, 45-second feasibility, and
+      implementation risk; select a direction. Ensure both proposals contain a valid
+      coloring list of length n. Use only imports and public assets allowed by the
+      current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 2048
+    temperature: 0.2
+    device: null
+  proc_l2_1:
+    id: proc_l2_1
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:GLM-5.3-Flash
+    prompt: Refine the selected search implementation; address a measured conflict
+      or throughput bottleneck. Output a valid Python list `coloring` of length n
+      (number of nodes) with each entry an integer in [0, target_k). Use only imports
+      and public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.45
+    device: null
+  proc_l2_2:
+    id: proc_l2_2
+    role: processor
+    agent_type: CodeAgent
+    model_id: openai:GLM-5.3-Flash
+    prompt: Independently challenge the selected algorithm on deadlines, color validity,
+      and relabelled graphs. Output a valid Python list `coloring` of length n (number
+      of nodes) with each entry an integer in [0, target_k). Use only imports and
+      public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.35
+    device: null
+  judge_l2:
+    id: judge_l2
+    role: judge
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Compare the two revisions using public per-graph conflicts and correctness;
+      state unresolved risks. Verify both revisions have a valid coloring list of length
+      n. Use only imports and public assets allowed by the current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 2048
+    temperature: 0.2
+    device: null
+  aggregator:
+    id: aggregator
+    role: aggregator
+    agent_type: CodeAgent
+    model_id: openai:deepseek-v4-flash-s2
+    prompt: Synthesize one complete solve(data) returning all requested colorings,
+      integers in [0,target_k); selfcheck within 45 seconds per graph. Ensure the
+      final `coloring` is a Python list of length n (number of nodes) with each entry
+      an integer in [0, target_k). Use only imports and public assets allowed by the
+      current official task.
+    tools:
+    - research_read_context
+    - research_read_public
+    - research_read_history
+    - research_write_candidate
+    - research_preflight
+    - research_read_feedback
+    - research_read_trace
+    - research_probe_candidate
+    max_tokens: 4096
+    temperature: 0.2
+    device: null
+topology:
+  reports_to:
+    proc_l1_1:
+    - judge_l1
+    proc_l1_2:
+    - judge_l1
+    judge_l1:
+    - proc_l2_1
+    - proc_l2_2
+    proc_l2_1:
+    - judge_l2
+    proc_l2_2:
+    - judge_l2
+    judge_l2:
+    - aggregator
+execution:
+  parallel_workers: true
+  timeout: 900
+  max_retries: 0
