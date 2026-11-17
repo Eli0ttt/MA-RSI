@@ -1,10 +1,6 @@
-# MA-RSI 六任务实验
+# MA-RSI
 
-在 RSI-Exam 六项官方任务上，研究 agent 从通用 MAS 配置池选择两份父配置，使用各任务公开数据生成和检查候选，并将最终公开胜出产物交给 Harbor 独立密封验证。每个 seed 最多六个**通过公开自检**的版本；失败的生成或自检尝试另记在 `attempts.json`，不计版本。每个任务的研究时限从其 `task.toml` 的 `[agent].timeout_sec` 读取。
-
-## 安装
-
-将补丁 ZIP 从项目父目录解压并覆盖同名文件；本地的 `env/experiment.env`、`tests/` 和已有结果不在补丁内。检查 `env/experiment.env` 的 `OPENAI_API_KEY`、`MA_RSI_ROOT`、`RSI_TASKS_ROOT`、`HARBOR_BIN`。四模型池、元模型、版本数与请求超时均在 `env/experiment.env` 中设置；`env/experiment.env.example` 给出完整模板。官方公开 Docker 镜像须按每项 `rsi_exam_tasks/<name>/environment/Dockerfile` 构建；六个任务均通过各自的 `rsi-subset-<official-task>:public` 镜像执行公开检查，每次使用一次性隔离容器。保留服务器上原有的官方密封 `tests/`，不要让研究模型读到它。
+在 RSI-Exam 官方任务上，研究 agent 从通用 MAS 配置池选择两份父配置，使用各任务公开数据生成和检查候选，并将最终公开胜出产物交给 Harbor 独立密封验证。每个 seed 最多六个**通过公开自检**的版本；失败的生成或自检尝试另记在 `attempts.json`，不计版本。每个任务的研究时限从其 `task.toml` 的 `[agent].timeout_sec` 读取。
 
 ## 运行
 
@@ -29,25 +25,38 @@ for seed in 11 22 33; do bash "$ROOT/repro/runner/run.sh" "$ROOT" "$STATE" dcf o
 
 `trajectory_evidence.jsonl` 保存操作与公开证据，`best_reward_config.yaml` 和 `best_visible_solver.py` 保存最终选择。公开的经验与角色摘要并发写入 `repro/memory/`、`repro/skill/`；密封分数只进入汇总与 manifest。新任务的官方公开包位于 `rsi_exam_tasks/`，没有打包密封测试。
 
-## 环境变量命名
+## 当前实验流程
 
-现有服务器 `env/experiment.env` 中若保留旧变量名，请只替换通用变量的名称、保留其值及 API key。旧的 `BBO_EVAL_CONTAINER` 无需保留；六项公开评测均直接使用任务镜像。
+初选候选池包含 `repro/pool/rsi-exam-general/*.yaml`，以及当前任务的
+`repro/pool/<task>/*.yaml`（包括此前晋升的进化配置）。元模型从这个候选池
+选择两份父配置。通过公开检查的父配置及后续子配置组成**本轮临时池 W**。
 
-| 旧变量 | 新变量 | 用途 |
-| --- | --- | --- |
-| `BBO_ROOT` | `MA_RSI_ROOT` | 项目根目录 |
-| `BBO_EVAL_CONTAINER` | 删除 | 不再需要长驻公开容器 |
-| `BBO_OPENAI_TIMEOUT` | `MODEL_REQUEST_TIMEOUT_SEC` | 全任务模型请求超时 |
-| `BBO_OPENAI_MAX_RETRIES` | `MODEL_REQUEST_MAX_RETRIES` | 全任务模型请求重试 |
-| `SUBSET_MAX_VERSIONS` | `MAX_VALID_VERSIONS` | 每次任务的有效版本上限 |
+`MAX_VALID_VERSIONS=6`：两份父配置若通过公开检查，也计入六个有效版本；
+生成失败、配置校验失败或公开检查失败均不计数。
 
-`run.sh` 只读取并检查环境变量，不再重写元模型、模型池或版本数。`migrate.py` 也会把旧项目环境变量转换为新名称。
-
-BBO 公开镜像可从官方公开 `environment/Dockerfile` 构建，名称与其余任务相同：
-
-```bash
-ROOT=/data/user/wenxinyi/experiments/MA-RSI
-docker build -t rsi-subset-bbo_noisy_continuous:public "$ROOT/rsi_exam_tasks/bbo_noisy_continuous/environment"
+```mermaid
+flowchart TD
+    A["启动一个任务与 seed"] --> B["激活 mem 环境并读取 experiment.env"]
+    B --> C["检查官方任务文件和对应公开镜像"]
+    C --> D["初选池：general YAML + 当前任务进化 YAML"]
+    D --> E["元模型从初选池选择两份父配置"]
+    E --> F["执行父配置；有效者进入临时池 W 并计入版本"]
+    F --> G{"有效版本数小于 6<br/>且未到官方研究时限？"}
+    G -->|是| H{"在整个 W 中存在双向互补<br/>且接口可衔接的配对？"}
+    H -->|是| I["优先 crossover：继承完整拓扑并重组 agent"]
+    H -->|否| J{"W 至少有两份有效配置？"}
+    J -->|是| K["按 reward 取前两份；变异最高分配置"]
+    I --> L["校验配置、执行 MAS、运行官方公开检查"]
+    K --> L
+    L --> M{"候选有效？"}
+    M -->|否| N["记录失败；版本数不增加"]
+    M -->|是| O["子配置加入 W；有效版本数加 1"]
+    N --> G
+    O --> G
+    J -->|否| P{"W 有有效候选？"}
+    G -->|否| P
+    P -->|否| Q["停止本 seed；不提交密封评测"]
+    P -->|是| R["按 reward 选择公开胜出候选"]
+    R --> S["Harbor 独立密封评测一次"]
+    S --> T["提交公开经验并更新 results.csv"]
 ```
-
-公开评测会将候选 `solver.py` 只读挂载到镜像的 `/app/methods/main/solver.py`，执行官方 `selfcheck.py --json`。接口探针与公开轨迹探针也在同一镜像的独立临时容器中执行；无需已有的 `bbo-evomas-visible-wenxinyi` 容器。
